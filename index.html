@@ -2,9 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Multi-Face 3D Hat Filter</title>
+  <title>Multi-Face 3D Hat Filter with Rotation</title>
 
-  <!-- Import Map to tell browser where "three" lives -->
   <script type="importmap">
   {
     "imports": {
@@ -20,8 +19,8 @@
       position: absolute;
       top: 0;
       left: 0;
-      width: 100%;
       transform: scaleX(-1);
+      display: none;
     }
     canvas {
       position: absolute;
@@ -31,106 +30,123 @@
     }
   </style>
 </head>
-
 <body>
 
 <video id="video" autoplay playsinline muted></video>
 
 <script type="module">
-  // ===== Import Three.js and GLTFLoader using import map =====
-  import * as THREE from "three";
-  import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { FaceMesh } from "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
+import { Camera } from "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
 
-  // ===== Three.js Scene =====
-  const scene = new THREE.Scene();
-  const camera3D = new THREE.PerspectiveCamera(
-    45, window.innerWidth / window.innerHeight, 0.1, 1000
-  );
-  camera3D.position.z = 5;
+const video = document.getElementById("video");
 
-  const renderer = new THREE.WebGLRenderer({ alpha: true });
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  document.body.appendChild(renderer.domElement);
+// ===== Three.js Setup =====
+const OUTPUT_WIDTH = 1920;
+const OUTPUT_HEIGHT = 1080;
 
-  const MAX_HATS = 5;
-  const hats = [];
+const scene = new THREE.Scene();
+const camera3D = new THREE.PerspectiveCamera(45, OUTPUT_WIDTH / OUTPUT_HEIGHT, 0.1, 1000);
+camera3D.position.z = 5;
 
-  // Load the 3D hat model
-  const loader = new GLTFLoader();
-  loader.load("hat.glb", (gltf) => {
-    for (let i = 0; i < MAX_HATS; i++) {
-      const hat = gltf.scene.clone();
-      hat.scale.set(1, 1, 1);
-      hat.visible = false;
-      scene.add(hat);
-      hats.push(hat);
-    }
-  });
+const renderer = new THREE.WebGLRenderer({ alpha: true });
+renderer.setSize(OUTPUT_WIDTH, OUTPUT_HEIGHT);
+document.body.appendChild(renderer.domElement);
 
-  // ===== Face Mesh via MediaPipe =====
-  import { FaceMesh } from "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
-  import { Camera } from "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
-
-  const video = document.getElementById("video");
-
-  const faceMesh = new FaceMesh({
-    locateFile: (file) =>
-      `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-  });
-
-  faceMesh.setOptions({
-    maxNumFaces: MAX_HATS,
-    refineLandmarks: true,
-    minDetectionConfidence: 0.5,
-    minTrackingConfidence: 0.5
-  });
-
-  faceMesh.onResults(results => {
-    if (!results.multiFaceLandmarks) {
-      hats.forEach(h => h.visible = false);
-      return;
-    }
-    hats.forEach(h => h.visible = false);
-
-    results.multiFaceLandmarks.forEach((landmarks, index) => {
-      if (index >= hats.length) return;
-      const hat = hats[index];
-      hat.visible = true;
-
-      // Compute center between eyes + forehead
-      const leftEye = landmarks[33];
-      const rightEye = landmarks[263];
-      const topForehead = landmarks[10];
-
-      const x = (leftEye.x + rightEye.x) / 2 - 0.5;
-      const y = -(topForehead.y - 0.5);
-
-      hat.position.set(x * 6, y * 4 + 0.8, 0);
-
-      const faceWidth = Math.abs(rightEye.x - leftEye.x);
-      hat.scale.set(faceWidth * 4, faceWidth * 4, faceWidth * 4);
-    });
-  });
-
-  const cameraMP = new Camera(video, {
-    onFrame: async () => { await faceMesh.send({ image: video }); },
-    width: 640,
-    height: 480
-  });
-  cameraMP.start();
-
-  function animate() {
-    requestAnimationFrame(animate);
-    renderer.render(scene, camera3D);
+// ===== Load Hats =====
+const MAX_HATS = 5;
+const hats = [];
+const loader = new GLTFLoader();
+loader.load("hat.glb", gltf => {
+  for (let i = 0; i < MAX_HATS; i++) {
+    const hat = gltf.scene.clone();
+    hat.visible = false;
+    scene.add(hat);
+    hats.push(hat);
   }
-  animate();
+});
 
-  window.addEventListener("resize", () => {
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    camera3D.aspect = window.innerWidth / window.innerHeight;
-    camera3D.updateProjectionMatrix();
+// ===== MediaPipe FaceMesh =====
+const faceMesh = new FaceMesh({
+  locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+});
+faceMesh.setOptions({
+  maxNumFaces: MAX_HATS,
+  refineLandmarks: true,
+  minDetectionConfidence: 0.5,
+  minTrackingConfidence: 0.5
+});
+
+// Helper function to compute rotation from 3D landmarks
+function computeFaceRotation(landmarks) {
+  const leftEye = landmarks[33];
+  const rightEye = landmarks[263];
+  const noseTip = landmarks[1];
+  const forehead = landmarks[10];
+
+  // Vector between eyes → yaw
+  const eyeDx = rightEye.x - leftEye.x;
+  const eyeDy = rightEye.y - leftEye.y;
+  const yaw = Math.atan2(eyeDy, eyeDx);
+
+  // Vector nose → forehead → pitch
+  const noseDx = forehead.x - noseTip.x;
+  const noseDy = forehead.y - noseTip.y;
+  const noseDz = forehead.z - noseTip.z;
+  const pitch = Math.atan2(noseDy, noseDz);
+
+  // Roll from eyes tilt
+  const roll = Math.atan2(eyeDy, eyeDx);
+
+  return { yaw, pitch, roll };
+}
+
+faceMesh.onResults(results => {
+  if (!results.multiFaceLandmarks) {
+    hats.forEach(h => h.visible = false);
+    return;
+  }
+  hats.forEach(h => h.visible = false);
+
+  results.multiFaceLandmarks.forEach((landmarks, i) => {
+    if (i >= hats.length) return;
+    const hat = hats[i];
+    hat.visible = true;
+
+    const leftEye = landmarks[33];
+    const rightEye = landmarks[263];
+    const forehead = landmarks[10];
+
+    // Map normalized coordinates to 1920x1080
+    const x = -( (leftEye.x + rightEye.x)/2 - 0.5 ) * OUTPUT_WIDTH / 200;
+    const y = -( forehead.y - 0.5 ) * OUTPUT_HEIGHT / 200;
+    const faceWidth = Math.abs(rightEye.x - leftEye.x) * OUTPUT_WIDTH / 100;
+
+    hat.position.set(x, y + 0.8, 0);
+    hat.scale.set(faceWidth, faceWidth, faceWidth);
+
+    // Apply rotation
+    const { yaw, pitch, roll } = computeFaceRotation(landmarks);
+    hat.rotation.set(pitch, yaw, roll);
   });
-</script>
+});
 
+// ===== Camera Setup =====
+const cameraMP = new Camera(video, {
+  onFrame: async () => await faceMesh.send({ image: video }),
+  width: 640,
+  height: 480
+});
+cameraMP.start();
+
+// ===== Animation =====
+function animate() {
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera3D);
+}
+animate();
+
+</script>
 </body>
 </html>
