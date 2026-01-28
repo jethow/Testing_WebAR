@@ -18,8 +18,8 @@
       position: absolute;
       top: 50%;
       left: 50%;
-      transform: translate(-50%, -50%); /* remove scaleX flip here */
-      object-fit: contain; /* preserve aspect ratio */
+      transform: translate(-50%, -50%); /* no mirroring */
+      object-fit: contain;
       width: auto;
       height: 100%;
       max-width: 100%;
@@ -50,27 +50,26 @@
     renderer.domElement.style.transform = "translate(-50%, -50%)";
     document.body.appendChild(renderer.domElement);
 
-    // ===== LOAD HATS =====
-    const hats = [];
+    // ===== LOAD 3D HATS =====
     const MAX_HATS = 5;
+    const hats = [];
     const loader = new THREE.GLTFLoader();
     loader.load("hat.glb", (gltf) => {
       const baseHat = gltf.scene;
       for (let i = 0; i < MAX_HATS; i++) {
         const hat = baseHat.clone();
-        hat.scale.set(1,1,1);
+        hat.scale.set(1, 1, 1);
         hat.visible = false;
         scene.add(hat);
         hats.push(hat);
       }
     });
 
-    // ===== CAMERA + MEDIA PIPE =====
+    // ===== MEDIA PIPE FACE MESH =====
     const video = document.getElementById("video");
 
     const faceMesh = new FaceMesh({
-      locateFile: (file) =>
-        `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
     });
 
     faceMesh.setOptions({
@@ -82,39 +81,46 @@
 
     faceMesh.onResults(onResults);
 
-    // Flip camera feed using video track constraint
     const cameraMP = new Camera(video, {
-      onFrame: async () => { await faceMesh.send({ image: video }); },
+      onFrame: async () => {
+        await faceMesh.send({ image: video });
+      },
       width: 640,
-      height: 480,
-      facingMode: "user" // ensures selfie camera
+      height: 480
     });
     cameraMP.start();
 
-    // ===== POSITION HATS =====
+    // ===== POSITION HATS ON HEAD =====
     function onResults(results) {
-      if(!results.multiFaceLandmarks){
+      if (!results.multiFaceLandmarks) {
         hats.forEach(h => h.visible = false);
         return;
       }
 
       hats.forEach(h => h.visible = false);
 
-      results.multiFaceLandmarks.forEach((landmarks, index)=>{
-        if(index >= hats.length) return;
+      results.multiFaceLandmarks.forEach((landmarks, index) => {
+        if (index >= hats.length) return;
 
         const hat = hats[index];
         hat.visible = true;
 
+        // Landmarks: left eye, right eye, forehead
         const leftEye = landmarks[33];
         const rightEye = landmarks[263];
         const forehead = landmarks[10];
 
-        // Adjust X for mirrored camera so hat follows head correctly
-        const x = 0.5 - (leftEye.x + rightEye.x)/2; // flip X
+        // Compute center above forehead
+        const x = (leftEye.x + rightEye.x) / 2 - 0.5;
         const y = -(forehead.y - 0.5);
 
-        hat.position.set(x * 6, y * 4 + 0.2, 0); // offset slightly for correct vertical
+        // Adjust z to be slightly forward
+        const z = 0;
+
+        // Position
+        hat.position.set(x * 6, y * 4 + 0.2, z); // 0.2 offset brings hat closer to head
+
+        // Scale based on face width
         const faceWidth = Math.abs(rightEye.x - leftEye.x);
         hat.scale.set(faceWidth * 4, faceWidth * 4, faceWidth * 4);
       });
@@ -128,14 +134,15 @@
     animate();
 
     // ===== WINDOW RESIZE =====
-    function resizeHandler(){
+    function resizeHandler() {
       const aspect = window.innerWidth / window.innerHeight;
       camera3D.aspect = aspect;
       camera3D.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
 
-      const videoAspect = video.videoWidth / video.videoHeight || 640/480;
-      if(videoAspect > aspect){
+      // adjust video element
+      const videoAspect = video.videoWidth / video.videoHeight || 640 / 480;
+      if (videoAspect > aspect) {
         video.style.width = "100%";
         video.style.height = "auto";
       } else {
@@ -145,6 +152,7 @@
     }
     window.addEventListener("resize", resizeHandler);
     window.addEventListener("load", resizeHandler);
+
   </script>
 </body>
 </html>
