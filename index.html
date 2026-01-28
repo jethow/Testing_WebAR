@@ -1,11 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Face Hat Filter</title>
+  <meta charset="UTF-8">
+  <title>Multi-Face 3D Hat Filter</title>
 
   <!-- Three.js -->
   <script src="https://unpkg.com/three@0.152.2/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.152.2/examples/js/loaders/GLTFLoader.js"></script>
 
   <!-- MediaPipe Face Mesh -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
@@ -16,30 +17,26 @@
       margin: 0;
       overflow: hidden;
     }
-    video {
+
+    video, canvas {
       position: absolute;
-      top: 0;
-      left: 0;
-      transform: scaleX(-1);
-    }
-    canvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      pointer-events: none;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scaleX(-1); /* mirror horizontally */
+      object-fit: contain; /* keep aspect ratio */
+      width: auto;
+      height: 100%;
+      max-width: 100%;
+      max-height: 100%;
     }
   </style>
 </head>
 
 <body>
-
-  <!-- Camera -->
   <video id="video" autoplay muted playsinline></video>
-
   <script>
     // ====== THREE.JS SETUP ======
     const scene = new THREE.Scene();
-
     const camera3D = new THREE.PerspectiveCamera(
       45,
       window.innerWidth / window.innerHeight,
@@ -50,34 +47,40 @@
 
     const renderer = new THREE.WebGLRenderer({ alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.domElement.style.position = "absolute";
+    renderer.domElement.style.top = "50%";
+    renderer.domElement.style.left = "50%";
+    renderer.domElement.style.transform = "translate(-50%, -50%)";
     document.body.appendChild(renderer.domElement);
 
-    // ====== HAT IMAGE ======
-    const textureLoader = new THREE.TextureLoader();
-    const hatTexture = textureLoader.load("hat.png");
-
-    const hatMaterial = new THREE.MeshBasicMaterial({
-      map: hatTexture,
-      transparent: true
+    // ====== LOAD HATS ======
+    const hats = [];
+    const MAX_HATS = 5;
+    const loader = new THREE.GLTFLoader();
+    loader.load("hat.glb", (gltf) => {
+      const baseHat = gltf.scene;
+      for (let i = 0; i < MAX_HATS; i++) {
+        const hat = baseHat.clone();
+        hat.scale.set(1,1,1);
+        hat.visible = false;
+        scene.add(hat);
+        hats.push(hat);
+      }
     });
 
-    const hatGeometry = new THREE.PlaneGeometry(2, 1.2);
-    const hat = new THREE.Mesh(hatGeometry, hatMaterial);
-    scene.add(hat);
-
-    // ====== MEDIAPIPE FACE MESH ======
+    // ====== CAMERA + MEDIA PIPE ======
     const video = document.getElementById("video");
 
     const faceMesh = new FaceMesh({
-      locateFile: file =>
+      locateFile: (file) =>
         `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
     });
 
     faceMesh.setOptions({
-      maxNumFaces: 1,
+      maxNumFaces: MAX_HATS,
       refineLandmarks: true,
-      minDetectionConfidence: 0.6,
-      minTrackingConfidence: 0.6
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
     });
 
     faceMesh.onResults(onResults);
@@ -91,29 +94,33 @@
     });
     cameraMP.start();
 
-    // ====== FACE TRACKING LOGIC ======
     function onResults(results) {
-      if (!results.multiFaceLandmarks.length) {
-        hat.visible = false;
+      if (!results.multiFaceLandmarks) {
+        hats.forEach(h => h.visible = false);
         return;
       }
 
-      hat.visible = true;
+      hats.forEach(h => h.visible = false);
 
-      const landmarks = results.multiFaceLandmarks[0];
+      results.multiFaceLandmarks.forEach((landmarks, index) => {
+        if (index >= hats.length) return;
 
-      // Forehead landmarks
-      const left = landmarks[234];
-      const right = landmarks[454];
-      const top = landmarks[10];
+        const hat = hats[index];
+        hat.visible = true;
 
-      const x = (left.x + right.x) / 2 - 0.5;
-      const y = -(top.y - 0.5);
+        const leftEye = landmarks[33];
+        const rightEye = landmarks[263];
+        const forehead = landmarks[10];
 
-      hat.position.set(x * 6, y * 4 + 1.2, 0);
+        // Position in normalized coordinates
+        const x = (leftEye.x + rightEye.x)/2 - 0.5;
+        const y = -(forehead.y - 0.5);
+        hat.position.set(x * 6, y * 4 + 0.8, 0);
 
-      const faceWidth = Math.abs(right.x - left.x);
-      hat.scale.set(faceWidth * 10, faceWidth * 5, 1);
+        // Scale based on face width
+        const faceWidth = Math.abs(rightEye.x - leftEye.x);
+        hat.scale.set(faceWidth*4, faceWidth*4, faceWidth*4);
+      });
     }
 
     // ====== RENDER LOOP ======
@@ -123,12 +130,25 @@
     }
     animate();
 
-    // ====== RESIZE ======
-    window.addEventListener("resize", () => {
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      camera3D.aspect = window.innerWidth / window.innerHeight;
+    // ====== RESIZE HANDLING ======
+    function resizeHandler() {
+      const aspect = window.innerWidth / window.innerHeight;
+      camera3D.aspect = aspect;
       camera3D.updateProjectionMatrix();
-    });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+
+      // adjust video element
+      const videoAspect = video.videoWidth / video.videoHeight || 640/480;
+      if(videoAspect > aspect){
+        video.style.width = "100%";
+        video.style.height = "auto";
+      } else {
+        video.style.width = "auto";
+        video.style.height = "100%";
+      }
+    }
+    window.addEventListener("resize", resizeHandler);
+    window.addEventListener("load", resizeHandler);
   </script>
 </body>
 </html>
