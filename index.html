@@ -2,101 +2,135 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Multi‑Face Hat Filter (MediaPipe)</title>
+  <title>Multi-Face 3D Hat Filter</title>
+
+  <!-- Import Map to tell browser where "three" lives -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js",
+      "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/"
+    }
+  }
+  </script>
+
   <style>
     body { margin: 0; overflow: hidden; }
-    video, canvas {
+    video {
       position: absolute;
-      top: 0; left: 0;
-      width: 100%; height: auto;
+      top: 0;
+      left: 0;
+      width: 100%;
       transform: scaleX(-1);
     }
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+    }
   </style>
-
-  <!-- MediaPipe FaceMesh + Helpers -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 </head>
 
 <body>
-  <video id="video" autoplay playsinline muted></video>
-  <canvas id="canvas"></canvas>
 
-  <script>
-    const video = document.getElementById("video");
-    const canvas = document.getElementById("canvas");
-    const ctx = canvas.getContext("2d");
+<video id="video" autoplay playsinline muted></video>
 
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+<script type="module">
+  // ===== Import Three.js and GLTFLoader using import map =====
+  import * as THREE from "three";
+  import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
-    const hatImg = new Image();
-    hatImg.src = "hat.png";
+  // ===== Three.js Scene =====
+  const scene = new THREE.Scene();
+  const camera3D = new THREE.PerspectiveCamera(
+    45, window.innerWidth / window.innerHeight, 0.1, 1000
+  );
+  camera3D.position.z = 5;
 
-    const faceMesh = new FaceMesh({
-      locateFile: (file) => {
-        return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
-      }
-    });
+  const renderer = new THREE.WebGLRenderer({ alpha: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
 
-    faceMesh.setOptions({
-      maxNumFaces: 5,
-      refineLandmarks: true,
-      minDetectionConfidence: 0.6,
-      minTrackingConfidence: 0.6
-    });
+  const MAX_HATS = 5;
+  const hats = [];
 
-    faceMesh.onResults(onResults);
-
-    const camera = new Camera(video, {
-      onFrame: async () => {
-        await faceMesh.send({ image: video });
-      },
-      width: 640,
-      height: 480
-    });
-    camera.start();
-
-    function onResults(results) {
-      // draw video mirror
-      ctx.save();
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.scale(-1, 1);
-      ctx.translate(-canvas.width, 0);
-      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-
-      if (results.multiFaceLandmarks) {
-        results.multiFaceLandmarks.forEach(landmarks => {
-          // compute approximate face position
-          const leftEye = landmarks[33];
-          const rightEye = landmarks[263];
-          const forehead = landmarks[10];
-
-          const cx = (leftEye.x + rightEye.x) / 2;
-          const cy = forehead.y;
-
-          const faceWidth = Math.abs(rightEye.x - leftEye.x);
-          const hatWidth = faceWidth * canvas.width * 2;
-          const hatHeight = hatWidth * 0.8;
-
-          ctx.drawImage(
-            hatImg,
-            cx * canvas.width - hatWidth / 2,
-            cy * canvas.height - hatHeight * 1.15,
-            hatWidth,
-            hatHeight
-          );
-        });
-      }
-      ctx.restore();
+  // Load the 3D hat model
+  const loader = new GLTFLoader();
+  loader.load("hat.glb", (gltf) => {
+    for (let i = 0; i < MAX_HATS; i++) {
+      const hat = gltf.scene.clone();
+      hat.scale.set(1, 1, 1);
+      hat.visible = false;
+      scene.add(hat);
+      hats.push(hat);
     }
+  });
 
-    window.addEventListener("resize", () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+  // ===== Face Mesh via MediaPipe =====
+  import { FaceMesh } from "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
+  import { Camera } from "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
+
+  const video = document.getElementById("video");
+
+  const faceMesh = new FaceMesh({
+    locateFile: (file) =>
+      `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+  });
+
+  faceMesh.setOptions({
+    maxNumFaces: MAX_HATS,
+    refineLandmarks: true,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
+  });
+
+  faceMesh.onResults(results => {
+    if (!results.multiFaceLandmarks) {
+      hats.forEach(h => h.visible = false);
+      return;
+    }
+    hats.forEach(h => h.visible = false);
+
+    results.multiFaceLandmarks.forEach((landmarks, index) => {
+      if (index >= hats.length) return;
+      const hat = hats[index];
+      hat.visible = true;
+
+      // Compute center between eyes + forehead
+      const leftEye = landmarks[33];
+      const rightEye = landmarks[263];
+      const topForehead = landmarks[10];
+
+      const x = (leftEye.x + rightEye.x) / 2 - 0.5;
+      const y = -(topForehead.y - 0.5);
+
+      hat.position.set(x * 6, y * 4 + 0.8, 0);
+
+      const faceWidth = Math.abs(rightEye.x - leftEye.x);
+      hat.scale.set(faceWidth * 4, faceWidth * 4, faceWidth * 4);
     });
-  </script>
+  });
+
+  const cameraMP = new Camera(video, {
+    onFrame: async () => { await faceMesh.send({ image: video }); },
+    width: 640,
+    height: 480
+  });
+  cameraMP.start();
+
+  function animate() {
+    requestAnimationFrame(animate);
+    renderer.render(scene, camera3D);
+  }
+  animate();
+
+  window.addEventListener("resize", () => {
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera3D.aspect = window.innerWidth / window.innerHeight;
+    camera3D.updateProjectionMatrix();
+  });
+</script>
+
 </body>
 </html>
